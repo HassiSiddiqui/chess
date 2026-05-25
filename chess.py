@@ -380,50 +380,55 @@ PROMO_LABELS = {QUEEN: 'Queen', ROOK: 'Rook', BISHOP: 'Bishop', KNIGHT: 'Knight'
 # ─────────────────────────────────────────────
 #  Rendering helpers
 # ─────────────────────────────────────────────
-def sq_to_pixel(r, c):
-    """Top-left pixel of board square (r,c)."""
-    return (BOARD_OFFSET_X + c * SQUARE, BOARD_OFFSET_Y + r * SQUARE)
+def sq_to_pixel(r, c, flipped=False):
+    """Top-left pixel of board square (r,c), respecting board orientation."""
+    dr = 7 - r if flipped else r
+    dc = 7 - c if flipped else c
+    return (BOARD_OFFSET_X + dc * SQUARE, BOARD_OFFSET_Y + dr * SQUARE)
 
 
-def pixel_to_sq(px, py):
+def pixel_to_sq(px, py, flipped=False):
     """Board square (r,c) from pixel, or None if outside board."""
-    c = (px - BOARD_OFFSET_X) // SQUARE
-    r = (py - BOARD_OFFSET_Y) // SQUARE
-    if 0 <= r < 8 and 0 <= c < 8:
-        return r, c
-    return None
+    dc = (px - BOARD_OFFSET_X) // SQUARE
+    dr = (py - BOARD_OFFSET_Y) // SQUARE
+    if not (0 <= dr < 8 and 0 <= dc < 8):
+        return None
+    c = 7 - dc if flipped else dc
+    r = 7 - dr if flipped else dr
+    return r, c
 
 
-def draw_board(screen, gs, selected, highlights, font_piece, font_small):
-    # Squares
+def draw_board(screen, gs, selected, highlights, font_piece, font_small, flipped=False):
+    """Render squares, highlights, pieces, border, and coordinate labels.
+    When flipped=True the board is shown from Black's perspective."""
     king_in_check = None
     if gs.status in ('check', 'checkmate'):
         king_in_check = king_pos(gs.board, gs.turn)
 
     for r in range(8):
         for c in range(8):
-            light = (r + c) % 2 == 0
+            light  = (r + c) % 2 == 0
             colour = C_LIGHT if light else C_DARK
-            x, y   = sq_to_pixel(r, c)
+            x, y   = sq_to_pixel(r, c, flipped)
             pygame.draw.rect(screen, colour, (x, y, SQUARE, SQUARE))
 
-            # Check highlight
+            # King-in-check red glow
             if king_in_check and (r, c) == king_in_check:
                 s = pygame.Surface((SQUARE, SQUARE), pygame.SRCALPHA)
                 s.fill(C_CHECK)
                 screen.blit(s, (x, y))
 
-            # Selection highlight
+            # Selected-piece green highlight
             if selected and (r, c) == selected:
                 s = pygame.Surface((SQUARE, SQUARE), pygame.SRCALPHA)
                 s.fill(C_SELECT)
                 screen.blit(s, (x, y))
 
-            # Move highlights — dot for empty, ring for capture
+            # Legal-move hints — dot for empty, ring for capture
             if (r, c) in highlights:
                 piece = gs.board[r][c]
                 s = pygame.Surface((SQUARE, SQUARE), pygame.SRCALPHA)
-                if piece is None or (gs.ep_square == (r, c)):
+                if piece is None or gs.ep_square == (r, c):
                     pygame.draw.circle(s, C_MOVE, (SQUARE//2, SQUARE//2), SQUARE//6)
                 else:
                     pygame.draw.circle(s, C_MOVE, (SQUARE//2, SQUARE//2), SQUARE//2 - 3, 5)
@@ -434,47 +439,54 @@ def draw_board(screen, gs, selected, highlights, font_piece, font_small):
         for c in range(8):
             p = gs.board[r][c]
             if p:
-                x, y   = sq_to_pixel(r, c)
-                symbol  = UNICODE[p]
-                col_p   = (255, 255, 255) if p[0] == WHITE else (15, 15, 15)
-                shadow  = (50, 50, 50)    if p[0] == WHITE else (200, 200, 200)
-                # Shadow
-                surf    = font_piece.render(symbol, True, shadow)
-                rect    = surf.get_rect(center=(x + SQUARE//2 + 2, y + SQUARE//2 + 2))
-                screen.blit(surf, rect)
-                # Piece
-                surf    = font_piece.render(symbol, True, col_p)
-                rect    = surf.get_rect(center=(x + SQUARE//2, y + SQUARE//2))
-                screen.blit(surf, rect)
+                x, y  = sq_to_pixel(r, c, flipped)
+                symbol = UNICODE[p]
+                col_p  = (255, 255, 255) if p[0] == WHITE else (15, 15, 15)
+                shadow = (50,  50,  50)  if p[0] == WHITE else (200, 200, 200)
+                surf   = font_piece.render(symbol, True, shadow)
+                screen.blit(surf, surf.get_rect(center=(x + SQUARE//2 + 2, y + SQUARE//2 + 2)))
+                surf   = font_piece.render(symbol, True, col_p)
+                screen.blit(surf, surf.get_rect(center=(x + SQUARE//2, y + SQUARE//2)))
 
     # Board border
     pygame.draw.rect(screen, (80, 60, 40),
                      (BOARD_OFFSET_X - 2, BOARD_OFFSET_Y - 2,
                       BOARD_SIZE + 4, BOARD_SIZE + 4), 3)
 
-    # Rank / file labels
-    files = 'abcdefgh'
+    # Coordinate labels — flip-aware
+    files = 'abcdefgh' if not flipped else 'hgfedcba'
     for i in range(8):
-        # File labels (bottom)
+        # File label at bottom-right of each column
         lbl = font_small.render(files[i], True, (160, 140, 120))
-        screen.blit(lbl, (BOARD_OFFSET_X + i*SQUARE + SQUARE - 12,
+        screen.blit(lbl, (BOARD_OFFSET_X + i * SQUARE + SQUARE - 12,
                           BOARD_OFFSET_Y + BOARD_SIZE - 14))
-        # Rank labels (left)
-        lbl = font_small.render(str(8 - i), True, (160, 140, 120))
-        screen.blit(lbl, (BOARD_OFFSET_X + 3, BOARD_OFFSET_Y + i*SQUARE + 3))
+        # Rank label at top-left of each row
+        rank_num = str(i + 1) if flipped else str(8 - i)
+        lbl = font_small.render(rank_num, True, (160, 140, 120))
+        screen.blit(lbl, (BOARD_OFFSET_X + 3, BOARD_OFFSET_Y + i * SQUARE + 3))
+
+    # Orientation indicator (tiny badge in top-right corner of board)
+    badge_txt  = '▲ Black' if flipped else '▲ White'
+    badge_col  = (180, 200, 255)
+    badge_surf = font_small.render(badge_txt, True, badge_col)
+    bx = BOARD_OFFSET_X + BOARD_SIZE - badge_surf.get_width() - 4
+    by = BOARD_OFFSET_Y + 2
+    screen.blit(badge_surf, (bx, by))
 
 
-def draw_panel(screen, gs, font_ui, font_small, btn_rect, btn_hover):
-    # Background panel below board
+def draw_panel(screen, gs, font_ui, font_small,
+               btn_new_rect, btn_new_hover,
+               btn_flip_rect, btn_flip_hover, flipped):
+    """Render the status bar and control buttons below the board."""
     pygame.draw.rect(screen, C_PANEL, (0, BOARD_OFFSET_Y + BOARD_SIZE, WIDTH,
-                                        HEIGHT - BOARD_OFFSET_Y - BOARD_SIZE))
+                                       HEIGHT - BOARD_OFFSET_Y - BOARD_SIZE))
 
     # Turn / status text
     if gs.status == 'playing':
         name = "White's Turn" if gs.turn == WHITE else "Black's Turn"
         col  = (240, 230, 200)
     elif gs.status == 'check':
-        name = ("White is in CHECK!" if gs.turn == WHITE else "Black is in CHECK!")
+        name = "White is in CHECK!" if gs.turn == WHITE else "Black is in CHECK!"
         col  = (255, 120, 80)
     elif gs.status == 'checkmate':
         winner = "White" if gs.winner == WHITE else "Black"
@@ -485,14 +497,22 @@ def draw_panel(screen, gs, font_ui, font_small, btn_rect, btn_hover):
         col  = (180, 180, 255)
 
     lbl = font_ui.render(name, True, col)
-    screen.blit(lbl, lbl.get_rect(center=(WIDTH//2, BOARD_OFFSET_Y + BOARD_SIZE + 28)))
+    screen.blit(lbl, lbl.get_rect(center=(WIDTH//2, BOARD_OFFSET_Y + BOARD_SIZE + 24)))
 
-    # New Game button
-    bc = C_BTN_H if btn_hover else C_BTN
-    pygame.draw.rect(screen, bc, btn_rect, border_radius=8)
-    pygame.draw.rect(screen, (120, 160, 255), btn_rect, 2, border_radius=8)
+    # ── New Game button ──────────────────────
+    bc = C_BTN_H if btn_new_hover else C_BTN
+    pygame.draw.rect(screen, bc, btn_new_rect, border_radius=8)
+    pygame.draw.rect(screen, (120, 160, 255), btn_new_rect, 2, border_radius=8)
     blbl = font_ui.render("New Game", True, (230, 235, 255))
-    screen.blit(blbl, blbl.get_rect(center=btn_rect.center))
+    screen.blit(blbl, blbl.get_rect(center=btn_new_rect.center))
+
+    # ── Flip Board button ────────────────────
+    fc = C_BTN_H if btn_flip_hover else (50, 80, 130)
+    pygame.draw.rect(screen, fc, btn_flip_rect, border_radius=8)
+    pygame.draw.rect(screen, (100, 140, 220), btn_flip_rect, 2, border_radius=8)
+    flip_label = "⟳ Flip Board"
+    flbl = font_ui.render(flip_label, True, (210, 225, 255))
+    screen.blit(flbl, flbl.get_rect(center=btn_flip_rect.center))
 
 
 def draw_promotion(screen, colour, font_piece, font_ui):
@@ -546,33 +566,49 @@ def main():
     font_ui    = load_font(22)
     font_small = load_font(14)
 
-    gs         = GameState()
-    selected   = None          # (r, c) of selected square
-    highlights = set()         # set of (r, c) legal move targets
-    promoting  = False         # waiting for promotion choice
-    promo_pos  = None          # (tr, tc, fr, fc) pending promotion
+    gs           = GameState()
+    selected     = None          # (r, c) of selected square
+    highlights   = set()         # set of (r, c) legal move targets
+    promoting    = False         # waiting for promotion choice
+    promo_pos    = None          # (tr, tc, fr, fc) pending promotion
     promo_colour = None
+    # flipped=True  → board shown from Black's perspective (row 0 at bottom)
+    # auto_flip=True → board flips automatically after every move
+    flipped      = False
+    auto_flip    = True
 
-    btn_rect   = pygame.Rect(WIDTH//2 - 75, BOARD_OFFSET_Y + BOARD_SIZE + 44, 150, 38)
+    panel_y    = BOARD_OFFSET_Y + BOARD_SIZE
+    btn_new_rect  = pygame.Rect(WIDTH//2 - 165, panel_y + 42, 150, 36)
+    btn_flip_rect = pygame.Rect(WIDTH//2 +  15, panel_y + 42, 150, 36)
 
     running = True
     while running:
         clock.tick(FPS)
-        mx, my = pygame.mouse.get_pos()
-        btn_hover = btn_rect.collidepoint(mx, my)
+        mx, my        = pygame.mouse.get_pos()
+        btn_new_hover  = btn_new_rect.collidepoint(mx, my)
+        btn_flip_hover = btn_flip_rect.collidepoint(mx, my)
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
 
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                # New game button
-                if btn_rect.collidepoint(mx, my):
-                    gs         = GameState()
+                # ── New Game button ──────────────────────────────────
+                if btn_new_rect.collidepoint(mx, my):
+                    gs           = GameState()
+                    selected     = None
+                    highlights   = set()
+                    promoting    = False
+                    promo_pos    = None
+                    flipped      = False   # reset to White-at-bottom
+                    continue
+
+                # ── Flip Board button ────────────────────────────────
+                if btn_flip_rect.collidepoint(mx, my):
+                    flipped    = not flipped
+                    auto_flip  = False     # manual flip → disable auto-flip
                     selected   = None
                     highlights = set()
-                    promoting  = False
-                    promo_pos  = None
                     continue
 
                 # Promotion overlay click
@@ -591,7 +627,7 @@ def main():
                 if gs.status in ('checkmate', 'stalemate'):
                     continue
 
-                sq = pixel_to_sq(mx, my)
+                sq = pixel_to_sq(mx, my, flipped)
                 if sq is None:
                     selected   = None
                     highlights = set()
@@ -623,6 +659,9 @@ def main():
                             highlights   = set()
                         else:
                             do_move(gs, fr, fc, r, c)
+                            # Auto-flip: show the board from the next player's POV
+                            if auto_flip:
+                                flipped = (gs.turn == BLACK)
                             selected   = None
                             highlights = set()
                     elif piece and piece[0] == gs.turn:
@@ -635,8 +674,10 @@ def main():
 
         # ── Draw ──────────────────────────────
         screen.fill(C_BG)
-        draw_board(screen, gs, selected, highlights, font_piece, font_small)
-        draw_panel(screen, gs, font_ui, font_small, btn_rect, btn_hover)
+        draw_board(screen, gs, selected, highlights, font_piece, font_small, flipped)
+        draw_panel(screen, gs, font_ui, font_small,
+                   btn_new_rect, btn_new_hover,
+                   btn_flip_rect, btn_flip_hover, flipped)
 
         if promoting:
             draw_promotion(screen, promo_colour, font_piece, font_ui)
