@@ -515,32 +515,68 @@ def draw_panel(screen, gs, font_ui, font_small,
     screen.blit(flbl, flbl.get_rect(center=btn_flip_rect.center))
 
 
-def draw_promotion(screen, colour, font_piece, font_ui):
-    """Render promotion choice overlay."""
+# Maps keyboard key → promotion kind (used during promotion overlay)
+PROMO_KEY_MAP = {
+    pygame.K_q: QUEEN,
+    pygame.K_r: ROOK,
+    pygame.K_b: BISHOP,
+    pygame.K_n: KNIGHT,
+}
+PROMO_HOTKEYS = {QUEEN: 'Q', ROOK: 'R', BISHOP: 'B', KNIGHT: 'N'}
+
+
+def build_promo_rects():
+    """Return list of (pygame.Rect, kind) for the four promotion cards.
+    Positions are fixed so they can be stored once and reused every frame."""
+    total_w = len(PROMO_PIECES) * 120
+    start_x = WIDTH // 2 - total_w // 2
+    return [
+        (pygame.Rect(start_x + i * 120, HEIGHT // 2 - 70, 108, 118), kind)
+        for i, kind in enumerate(PROMO_PIECES)
+    ]
+
+
+def draw_promotion(screen, colour, promo_rects, font_piece, font_ui, font_small, mx, my):
+    """Render the promotion choice overlay with hover highlight.
+    promo_rects must be the list from build_promo_rects()."""
+    # Dark semi-transparent backdrop
     overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-    overlay.fill((10, 10, 20, 200))
+    overlay.fill((8, 8, 18, 215))
     screen.blit(overlay, (0, 0))
 
-    title = font_ui.render("Choose promotion piece:", True, (230, 220, 200))
-    screen.blit(title, title.get_rect(center=(WIDTH//2, HEIGHT//2 - 90)))
+    # Title
+    who  = 'White' if colour == WHITE else 'Black'
+    title = font_ui.render(f"{who}'s Pawn — Choose promotion:", True, (240, 225, 190))
+    screen.blit(title, title.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 100)))
 
-    rects = []
-    total_w = len(PROMO_PIECES) * 110
-    start_x = WIDTH//2 - total_w//2
-    for i, kind in enumerate(PROMO_PIECES):
-        rx = start_x + i * 110
-        ry = HEIGHT//2 - 60
-        r  = pygame.Rect(rx, ry, 100, 100)
-        pygame.draw.rect(screen, (50, 60, 90), r, border_radius=10)
-        pygame.draw.rect(screen, (100, 130, 200), r, 2, border_radius=10)
+    col_p = (255, 255, 255) if colour == WHITE else (15, 15, 15)
+
+    for rect, kind in promo_rects:
+        hovered = rect.collidepoint(mx, my)
+        bg      = (80, 110, 180) if hovered else (40, 55, 95)
+        border  = (160, 200, 255) if hovered else (90, 120, 190)
+
+        # Card background with glow when hovered
+        pygame.draw.rect(screen, bg, rect, border_radius=12)
+        pygame.draw.rect(screen, border, rect, 2, border_radius=12)
+
+        # Piece symbol
         sym  = UNICODE[(colour, kind)]
-        col_p = (255, 255, 255) if colour == WHITE else (15, 15, 15)
         ps   = font_piece.render(sym, True, col_p)
-        screen.blit(ps, ps.get_rect(center=(rx + 50, ry + 42)))
-        nl   = font_ui.render(PROMO_LABELS[kind], True, (180, 180, 200))
-        screen.blit(nl, nl.get_rect(center=(rx + 50, ry + 84)))
-        rects.append((r, kind))
-    return rects
+        screen.blit(ps, ps.get_rect(center=(rect.centerx, rect.top + 46)))
+
+        # Piece name
+        nl = font_ui.render(PROMO_LABELS[kind], True,
+                            (220, 230, 255) if hovered else (160, 175, 210))
+        screen.blit(nl, nl.get_rect(center=(rect.centerx, rect.bottom - 22)))
+
+        # Keyboard shortcut hint
+        hint = font_small.render(f'[{PROMO_HOTKEYS[kind]}]', True, (120, 150, 200))
+        screen.blit(hint, hint.get_rect(center=(rect.centerx, rect.bottom - 6)))
+
+    # Bottom instruction
+    instr = font_small.render('Click a piece  or press  Q / R / B / N', True, (130, 140, 160))
+    screen.blit(instr, instr.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 80)))
 
 
 # ─────────────────────────────────────────────
@@ -572,6 +608,7 @@ def main():
     promoting    = False         # waiting for promotion choice
     promo_pos    = None          # (tr, tc, fr, fc) pending promotion
     promo_colour = None
+    promo_rects  = build_promo_rects()  # fixed rects, built once
     # flipped=True  → board shown from Black's perspective (row 0 at bottom)
     # auto_flip=True → board flips automatically after every move
     flipped      = False
@@ -592,6 +629,20 @@ def main():
             if event.type == pygame.QUIT:
                 running = False
 
+            # ── Keyboard shortcut for promotion (Q / R / B / N) ──────────
+            elif event.type == pygame.KEYDOWN and promoting:
+                chosen = PROMO_KEY_MAP.get(event.key)
+                if chosen is not None:
+                    tr, tc, fr, fc = promo_pos
+                    do_move(gs, fr, fc, tr, tc, promote_to=chosen)
+                    if auto_flip:
+                        flipped = (gs.turn == BLACK)
+                    promoting    = False
+                    promo_pos    = None
+                    promo_colour = None
+                    selected     = None
+                    highlights   = set()
+
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 # ── New Game button ──────────────────────────────────
                 if btn_new_rect.collidepoint(mx, my):
@@ -600,7 +651,9 @@ def main():
                     highlights   = set()
                     promoting    = False
                     promo_pos    = None
+                    promo_colour = None
                     flipped      = False   # reset to White-at-bottom
+                    auto_flip    = True
                     continue
 
                 # ── Flip Board button ────────────────────────────────
@@ -611,17 +664,23 @@ def main():
                     highlights = set()
                     continue
 
-                # Promotion overlay click
+                # Promotion overlay — mouse click on a card
                 if promoting:
-                    promo_rects = draw_promotion(screen, promo_colour, font_piece, font_ui)
+                    chosen = None
                     for rect, kind in promo_rects:
                         if rect.collidepoint(mx, my):
-                            tr, tc, fr, fc = promo_pos
-                            do_move(gs, fr, fc, tr, tc, promote_to=kind)
-                            promoting  = False
-                            promo_pos  = None
-                            selected   = None
-                            highlights = set()
+                            chosen = kind
+                            break
+                    if chosen is not None:
+                        tr, tc, fr, fc = promo_pos
+                        do_move(gs, fr, fc, tr, tc, promote_to=chosen)
+                        if auto_flip:
+                            flipped = (gs.turn == BLACK)
+                        promoting    = False
+                        promo_pos    = None
+                        promo_colour = None
+                        selected     = None
+                        highlights   = set()
                     continue
 
                 if gs.status in ('checkmate', 'stalemate'):
@@ -680,7 +739,8 @@ def main():
                    btn_flip_rect, btn_flip_hover, flipped)
 
         if promoting:
-            draw_promotion(screen, promo_colour, font_piece, font_ui)
+            draw_promotion(screen, promo_colour, promo_rects,
+                           font_piece, font_ui, font_small, mx, my)
 
         pygame.display.flip()
 
