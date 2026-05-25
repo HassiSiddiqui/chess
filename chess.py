@@ -12,8 +12,8 @@ import copy
 # ─────────────────────────────────────────────
 #  Constants
 # ─────────────────────────────────────────────
-WIDTH, HEIGHT = 720, 780
-BOARD_SIZE     = 680
+WIDTH, HEIGHT = 560, 620
+BOARD_SIZE     = 520
 SQUARE         = BOARD_SIZE // 8
 BOARD_OFFSET_X = (WIDTH - BOARD_SIZE) // 2
 BOARD_OFFSET_Y = 40
